@@ -95,6 +95,7 @@ public final class MainWindow implements Runnable, RipStatusHandler {
     private static JCheckBox configAutoupdateCheckbox;
     private static JComboBox<String> configLogLevelCombobox;
     private static JCheckBox configURLHistoryCheckbox;
+    private static JCheckBox configSSLVerifyOff;
     private static JCheckBox configPlaySound;
     private static JCheckBox configSaveOrderCheckbox;
     private static JCheckBox configShowPopup;
@@ -212,6 +213,7 @@ public final class MainWindow implements Runnable, RipStatusHandler {
         Utils.setConfigBoolean("descriptions.save", configSaveDescriptions.isSelected());
         Utils.setConfigBoolean("prefer.mp4", configPreferMp4.isSelected());
         Utils.setConfigBoolean("remember.url_history", configURLHistoryCheckbox.isSelected());
+        Utils.setConfigBoolean("ssl.verify.off", configSSLVerifyOff.isSelected());
         Utils.setConfigString("lang", configSelectLangComboBox.getSelectedItem().toString());
         saveWindowPosition(mainFrame);
         saveHistory();
@@ -565,12 +567,14 @@ public final class MainWindow implements Runnable, RipStatusHandler {
                 true);
         configURLHistoryCheckbox = addNewCheckbox(Utils.getLocalizedString("remember.url.history"),
                 "remember.url_history", true);
+        configSSLVerifyOff = addNewCheckbox(Utils.getLocalizedString("ssl.verify.off"),
+                "ssl.verify.off", false);
         configUrlFileChooserButton = new JButton(Utils.getLocalizedString("download.url.list"));
 
         configLogLevelCombobox = new JComboBox<>(
                 new String[] { "Log level: Error", "Log level: Warn", "Log level: Info", "Log level: Debug" });
         configSelectLangComboBox = new JComboBox<>(Utils.getSupportedLanguages());
-        configSelectLangComboBox.setSelectedItem(Utils.getSelectedLanguage());
+        configSelectLangComboBox.setSelectedItem(Utils.getConfigString("lang", Utils.getSelectedLanguage()));
         configLogLevelCombobox.setSelectedItem(Utils.getConfigString("log.level", "Log level: Debug"));
         setLogLevel(configLogLevelCombobox.getSelectedItem().toString());
         configSaveDirLabel = new JLabel();
@@ -599,6 +603,7 @@ public final class MainWindow implements Runnable, RipStatusHandler {
         addItemToConfigGridBagConstraints(gbc, idx++, configClipboardAutorip, configSaveAlbumTitles);
         addItemToConfigGridBagConstraints(gbc, idx++, configSaveDescriptions, configPreferMp4);
         addItemToConfigGridBagConstraints(gbc, idx++, configWindowPosition, configURLHistoryCheckbox);
+        addItemToConfigGridBagConstraints(gbc, idx++, configSSLVerifyOff, configSSLVerifyOff);
         addItemToConfigGridBagConstraints(gbc, idx++, configSelectLangComboBox, configUrlFileChooserButton);
         addItemToConfigGridBagConstraints(gbc, idx++, configSaveDirLabel, configSaveDirButton);
 
@@ -738,6 +743,7 @@ public final class MainWindow implements Runnable, RipStatusHandler {
         configPreferMp4.setText(Utils.getLocalizedString("prefer.mp4.over.gif"));
         configWindowPosition.setText(Utils.getLocalizedString("restore.window.position"));
         configURLHistoryCheckbox.setText(Utils.getLocalizedString("remember.url.history"));
+        configSSLVerifyOff.setText(Utils.getLocalizedString("ssl.verify.off"));
         optionLog.setText(Utils.getLocalizedString("Log"));
         optionHistory.setText(Utils.getLocalizedString("History"));
         optionQueue.setText(Utils.getLocalizedString("queue"));
@@ -745,8 +751,8 @@ public final class MainWindow implements Runnable, RipStatusHandler {
     }
 
     private void setupHandlers() {
-        ripButton.addActionListener(new RipButtonHandler());
-        ripTextfield.addActionListener(new RipButtonHandler());
+        ripButton.addActionListener(new RipButtonHandler(this));
+        ripTextfield.addActionListener(new RipButtonHandler(this));
         ripTextfield.getDocument().addDocumentListener(new DocumentListener() {
             @Override
             public void removeUpdate(DocumentEvent e) {
@@ -1012,6 +1018,7 @@ public final class MainWindow implements Runnable, RipStatusHandler {
         addCheckboxListener(configSaveLogs, "log.save");
         addCheckboxListener(configSaveURLsOnly, "urls_only.save");
         addCheckboxListener(configURLHistoryCheckbox, "remember.url_history");
+        addCheckboxListener(configSSLVerifyOff, "ssl.verify.off");
         addCheckboxListener(configSaveAlbumTitles, "album_titles.save");
         addCheckboxListener(configSaveDescriptions, "descriptions.save");
         addCheckboxListener(configPreferMp4, "prefer.mp4");
@@ -1383,10 +1390,25 @@ public final class MainWindow implements Runnable, RipStatusHandler {
         }
     }
 
-    class RipButtonHandler implements ActionListener {
+
+    public static JTextField getRipTextfield() {
+        return ripTextfield;
+    }
+
+    public static DefaultListModel<Object> getQueueListModel() {
+        return queueListModel;
+    }
+    static class RipButtonHandler implements ActionListener {
+
+        private MainWindow mainWindow;
+
+        public RipButtonHandler(MainWindow mainWindow) {
+            this.mainWindow = mainWindow;
+        }
         public void actionPerformed(ActionEvent event) {
             String url = ripTextfield.getText();
-            if (!queueListModel.contains(url) && !url.equals("")) {
+            boolean url_not_empty = !url.equals("");
+            if (!queueListModel.contains(url) && url_not_empty) {
                 // Check if we're ripping a range of urls
                 if (url.contains("{")) {
                     // Make sure the user hasn't forgotten the closing }
@@ -1396,22 +1418,25 @@ public final class MainWindow implements Runnable, RipStatusHandler {
                         int rangeEnd = Integer.parseInt(rangeToParse.split("-")[1]);
                         for (int i = rangeStart; i < rangeEnd + 1; i++) {
                             String realURL = url.replaceAll("\\{\\S*\\}", Integer.toString(i));
-                            if (canRip(realURL)) {
-                                queueListModel.add(queueListModel.size(), realURL);
+                            if (mainWindow.canRip(realURL)) {
+                                queueListModel.addElement(realURL);
                                 ripTextfield.setText("");
                             } else {
-                                displayAndLogError("Can't find ripper for " + realURL, Color.RED);
+                                mainWindow.displayAndLogError("Can't find ripper for " + realURL, Color.RED);
                             }
                         }
                     }
                 } else {
-                    queueListModel.add(queueListModel.size(), ripTextfield.getText());
+                    queueListModel.addElement(url);
                     ripTextfield.setText("");
                 }
-            } else {
-                if (!isRipping) {
-                    ripNextAlbum();
-                }
+            } else if (url_not_empty) {
+                mainWindow.displayAndLogError("This URL is already in queue: " + url, Color.RED);
+                mainWindow.statusWithColor("This URL is already in queue: " + url, Color.ORANGE);
+                ripTextfield.setText("");
+            }
+            else if(!mainWindow.isRipping){
+                mainWindow.ripNextAlbum();
             }
         }
     }
@@ -1518,7 +1543,7 @@ public final class MainWindow implements Runnable, RipStatusHandler {
             openButton.setVisible(true);
             Path f = rsc.dir;
             String prettyFile = Utils.shortenPath(f);
-            openButton.setText(Utils.getLocalizedString("open") + prettyFile);
+            openButton.setText(Utils.getLocalizedString("open") + " " + prettyFile);
             mainFrame.setTitle("RipMe v" + UpdateUtils.getThisJarVersion());
             try {
                 Image folderIcon = ImageIO.read(getClass().getClassLoader().getResource("folder.png"));
@@ -1528,8 +1553,8 @@ public final class MainWindow implements Runnable, RipStatusHandler {
             }
             /*
              * content key %path% the path to the album folder %url% is the album url
-             * 
-             * 
+             *
+             *
              */
             if (Utils.getConfigBoolean("enable.finish.command", false)) {
                 try {
